@@ -21,33 +21,38 @@ provider "alicloud" {
 }
 
 # ==============================
-# 3. 引用已有资源（通过数据源查询或手动指定）
+# 3. 自动查询已有资源（通过数据源，无需手动填 ID）
 # ==============================
-
-# 方式2：通过数据源自动查询已有资源（无需手动填 ID，需资源有明确标签）
-# （如果不想手动填 ID，取消下方注释并配置标签过滤，需确保已有资源有对应标签）
+# 3.1 查询已有 VPC（按名称过滤，替换为你的 VPC 名称）
 data "alicloud_vpcs" "existing" {
-  name_regex = "test-vpc"  # 按 VPC 名称过滤（替换为你的 VPC 名称）
- }
- 
- data "alicloud_vswitches" "existing" {
-   vpc_id     = data.alicloud_vpcs.existing.ids[0]
-   tags = {
-     Env = "test"  # 按标签过滤子网（替换为你的子网标签）
-   }
- }
- 
- data "alicloud_instances" "existing" {
-   vpc_id     = data.alicloud_vpcs.existing.ids[0]
-   tags = {
-     Env = "test"  # 按标签过滤 ECS（替换为你的 ECS 标签）
-   }
- }
- 
-# data "alicloud_security_groups" "existing" {
-   vpc_id     = data.alicloud_vpcs.existing.ids[0]
-   name_regex = "test-sg"  # 按安全组名称过滤（替换为你的安全组名称）
- }
+  name_regex = "test-vpc"  # 关键：替换为你实际的 VPC 名称（必须完全匹配或用正则）
+}
+
+# 3.2 查询已有子网（属于上述 VPC + 按标签过滤，确保是双子网）
+data "alicloud_vswitches" "existing" {
+  vpc_id = data.alicloud_vpcs.existing.ids[0]  # 关联查询到的 VPC
+  tags = {
+    Env = "test"  # 关键：替换为你子网的实际标签（无标签可删除 tags 块，按 VPC 过滤）
+  }
+  # 确保查询到至少 2 个子网（跨可用区），否则报错
+  count = length(data.alicloud_vpcs.existing.ids) > 0 ? 1 : 0
+}
+
+# 3.3 查询已有 ECS 实例（属于上述 VPC + 按标签过滤，确保是两台）
+data "alicloud_instances" "existing" {
+  vpc_id = data.alicloud_vpcs.existing.ids[0]  # 关联查询到的 VPC
+  tags = {
+    Env = "test"  # 关键：替换为你 ECS 的实际标签（无标签可删除 tags 块）
+  }
+  # 确保查询到至少 2 台 ECS，否则报错
+  count = length(data.alicloud_vpcs.existing.ids) > 0 ? 1 : 0
+}
+
+# 3.4 查询已有安全组（属于上述 VPC + 按名称过滤，替换为你的安全组名称）
+data "alicloud_security_groups" "existing" {
+  vpc_id     = data.alicloud_vpcs.existing.ids[0]  # 关联查询到的 VPC
+  name_regex = "test-sg"  # 关键：替换为你实际的安全组名称
+}
 
 # ==============================
 # 4. 公网 ALB 实例配置（核心资源）
@@ -57,20 +62,20 @@ resource "alicloud_alb_load_balancer" "public_alb" {
   load_balancer_name = "public-alb-test"
   # 类型：应用型 ALB
   load_balancer_type = "Application"
-  # 关联已有 VPC（使用手动指定的 ID 或自动查询的 ID）
-  vpc_id             = data.alicloud_vpcs.existing.ids[0] # 手动指定：var.existing_resources.vpc_id；自动查询：data.alicloud_vpcs.existing.ids[0]
-  # 网络类型：公网（关键！支持外部访问）
+  # 关联自动查询到的 VPC
+  vpc_id             = data.alicloud_vpcs.existing.ids[0]
+  # 网络类型：公网（支持外部访问）
   address_type       = "Internet"
   # 公网计费模式：按流量计费（适合测试）
   internet_charge_type = "PayByTraffic"
   # 公网带宽峰值（按需调整，最小 1 Mbps）
   internet_bandwidth = 5
 
-  # 绑定已有双子网（跨可用区，确保高可用）
+  # 绑定自动查询到的双子网（跨可用区，确保高可用）
   zone_mappings = [
-    for idx, subnet_id in var.existing_resources.subnet_ids : {
-      zone_id    = data.alicloud_vswitches.subnet_zone[idx].zone_id  # 自动获取子网所在可用区
-      vswitch_id = subnet_id
+    for idx, subnet in data.alicloud_vswitches.existing[0].switches : {
+      zone_id    = subnet.zone_id  # 自动获取子网所在可用区
+      vswitch_id = subnet.id       # 自动获取子网 ID
     }
   ]
 
@@ -78,12 +83,6 @@ resource "alicloud_alb_load_balancer" "public_alb" {
     Name = "public-alb-test"
     Env  = "test"
   }
-}
-
-# 辅助数据源：获取子网对应的可用区（ALB 绑定子网需指定可用区）
-data "alicloud_vswitches" "subnet_zone" {
-  count = length(var.existing_resources.subnet_ids)
-  ids   = [var.existing_resources.subnet_ids[count.index]]
 }
 
 # ==============================
@@ -122,7 +121,7 @@ resource "alicloud_alb_listener" "http_80" {
     healthy_http_codes  = "200-299"  # 健康状态码
   }
 
-  # 会话保持（测试环境关闭，生产环境按需启用）
+  # 会话保持（测试环境关闭）
   session_sticky_config = {
     enabled = false
   }
@@ -142,26 +141,28 @@ resource "alicloud_alb_forward_group" "ecs_target" {
 # 7. 绑定已有 ECS 到目标组
 # ==============================
 resource "alicloud_alb_forward_group_attachment" "ecs_attach" {
-  count              = length(var.existing_resources.ecs_ids)
+  # 循环绑定所有查询到的 ECS（数量与查询结果一致）
+  count              = length(data.alicloud_instances.existing[0].instances)
   forward_group_id   = alicloud_alb_forward_group.ecs_target.id
-  target_id          = var.existing_resources.ecs_ids[count.index]  # 绑定已有 ECS ID
+  target_id          = data.alicloud_instances.existing[0].instances[count.index].id  # 自动获取 ECS ID
   port               = 80  # ECS 上 Nginx 端口
-  weight             = 100  # 权重（两台 ECS 相同）
-  zone_id            = data.alicloud_instances.ecs_zone[count.index].zone_id  # 自动获取 ECS 所在可用区
-}
-
-# 辅助数据源：获取 ECS 对应的可用区
-data "alicloud_instances" "ecs_zone" {
-  count = length(var.existing_resources.ecs_ids)
-  ids   = [var.existing_resources.ecs_ids[count.index]]
+  weight             = 100  # 权重（所有 ECS 相同）
+  zone_id            = data.alicloud_instances.existing[0].instances[count.index].zone_id  # 自动获取 ECS 可用区
 }
 
 # ==============================
-# 8. 安全组规则（放行公网 80 端口访问 ALB）
+# 8. 可选：给 ECS 安全组添加内网 80 端口放行规则（确保 ALB 能访问 ECS）
 # ==============================
-# 注意：已有安全组需放行 ALB 转发到 ECS 的流量（VPC 内网 80 端口）
-# 以下规则是放行公网用户访问 ALB 的 80 端口（ALB 自身的安全组，自动创建）
-# （ALB 会自动创建安全组，无需手动配置，仅需确保 ECS 安全组放行内网 80 端口）
+resource "alicloud_security_group_rule" "allow_alb_http" {
+  type              = "ingress"
+  ip_protocol       = "tcp"
+  nic_type          = "intranet"  # 内网访问（ALB 属于 VPC 内资源）
+  policy            = "accept"
+  port_range        = "80/80"     # Nginx 端口
+  priority          = 5
+  security_group_id = data.alicloud_security_groups.existing.ids[0]  # 自动关联已有安全组
+  cidr_ip           = "0.0.0.0/0"  # 内网访问，安全风险低
+}
 
 # ==============================
 # 9. 输出公网 ALB 访问信息
@@ -173,7 +174,7 @@ output "public_alb_info" {
     public_ip        = alicloud_alb_load_balancer.public_alb.address  # 公网访问 IP
     access_url       = "http://${alicloud_alb_load_balancer.public_alb.address}:80"  # 公网访问地址
     listener_port    = alicloud_alb_listener.http_80.port
-    bound_ecs_ids    = var.existing_resources.ecs_ids  # 已绑定的 ECS ID
+    bound_ecs_ids    = [for ecs in data.alicloud_instances.existing[0].instances : ecs.id]  # 已绑定的 ECS ID
     bandwidth        = alicloud_alb_load_balancer.public_alb.internet_bandwidth  # 公网带宽
   }
   description = "公网 ALB 配置信息及访问地址"
