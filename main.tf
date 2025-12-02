@@ -63,7 +63,7 @@ resource "alicloud_alb_server_group" "backend_group" {
 sticky_session_config {
     sticky_session_enabled = false  # 不开启会话保持
     cookie                 = ""     # 关闭时可留空
-    sticky_session_type    = "Server" # 必填字段，关闭时也要传
+    sticky_session_type    = "Insert" # 必填字段，关闭时也要传
   }
 
   dynamic "servers" {
