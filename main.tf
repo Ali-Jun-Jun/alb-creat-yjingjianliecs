@@ -5,7 +5,7 @@ terraform {
   required_providers {
     alicloud = {
       source  = "aliyun/alicloud"
-      version = "1.280.0"  # 稳定版本，支持所有自动查询语法
+      version = "1.260.0"  # 稳定版本，支持所有自动查询语法
     }
   }
 }
