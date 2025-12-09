@@ -3,7 +3,7 @@ provider "alicloud" {
 }
 variable "vpc_id" {
 type = string
-value = "vpc-2zeskxt8mfmbx2tiq88hh"
+default = "vpc-2zeskxt8mfmbx2tiq88hh"
 }
 # 1. 获取已有 ECS 列表（按 VPC 或标签过滤）
 data "alicloud_instances" "ecs_list" {
