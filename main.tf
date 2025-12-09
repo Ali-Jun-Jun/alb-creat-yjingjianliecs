@@ -35,7 +35,7 @@ resource "alicloud_alb_load_balancer" "alb" {
   load_balancer_name    = "my-alb"
   address_type          = "Internet"
   load_balancer_edition = "Standard"
-  vpc_id                = "vpc-2zeka1kppfberxocw6zi9"
+  vpc_id                = var.vpc_id
 
   # 必填：计费配置
   load_balancer_billing_config {
